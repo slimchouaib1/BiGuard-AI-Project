@@ -1,0 +1,15 @@
+node_modules
+env*
+.env*
+*.db
+*.sqlite3
+*.pkl
+*.key
+*.pem
+*.crt
+*.secret
+*.token
+*.log
+frontend/.env*
+backend/.env*
+instance/

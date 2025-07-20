@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "react-router-dom": "^6.30.1"
+  },
+  "devDependencies": {
+    "tailwindcss-animate": "^1.0.7"
+  }
+}

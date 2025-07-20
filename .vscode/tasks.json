@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "Run Backend (Flask)",
+			"command": "python backend/app.py",
+			"group": "build",
+			"problemMatcher": []
+		}
+	]
+}
