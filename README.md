@@ -1,2 +1,2 @@
 # BiGuard-AI-Project
-BiGuard is an Azure-based AI platform for banking transaction monitoring and fraud detection. It integrates Plaid for real-time financial data, uses machine learning to detect anomalies and malware-like behavior, and includes a chatbot for instant financial insights and fraud-related information.
+BiGuard est une plateforme d’IA basée sur Azure pour la surveillance des transactions bancaires et la détection de fraude. Elle intègre l'API Plaid pour les données financières en temps réel, utilise le machine learning pour détecter les anomalies et les comportements similaires à des malwares, et inclut un chatbot pour fournir des informations financières et liées à la fraude en temps réel.
