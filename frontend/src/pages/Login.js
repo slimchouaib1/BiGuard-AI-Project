@@ -18,6 +18,8 @@ const Login = () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Login failed');
+      // Store access token for API calls
+      localStorage.setItem('access_token', data.access_token);
       // Redirect or show success
       window.location.href = '/dashboard';
     } catch (err) {
@@ -76,4 +78,4 @@ const Login = () => {
   );
 };
 
-export default Login; 
+export default Login;

@@ -1,3 +1,9 @@
+
+
+import os
+os.environ['PLAID_CLIENT_ID'] = '6853f9614ac5c0002193dd49'
+os.environ['PLAID_SECRET'] = 'bb5fd63a66f16fab15feeeb7466075'
+os.environ['PLAID_ENV'] = 'sandbox'
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -21,10 +27,8 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import numpy as np
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+
 
 app = Flask(__name__)
 CORS(app)
@@ -43,29 +47,35 @@ def get_azure_sqlalchemy_uri():
         f"mssql+pyodbc://{username}:{password}@{server}/{database}?driver={urllib.parse.quote(driver)}"
     )
 
-# ...existing code...
-    # ...existing code...
-
 app.config['SQLALCHEMY_DATABASE_URI'] = get_azure_sqlalchemy_uri()
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'jwt-secret-key')
 
 # Initialize extensions
 db = SQLAlchemy(app)
-jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
+jwt = JWTManager(app)
 
-# Plaid configuration
+# Plaid environment variables
+from plaid import Environment
+env_map = {
+    'sandbox': Environment.Sandbox,
+    'development': getattr(Environment, 'Development', Environment.Sandbox),
+    'production': Environment.Production
+}
+plaid_env = env_map.get(os.environ.get('PLAID_ENV', 'sandbox').lower(), Environment.Sandbox)
+PLAID_CLIENT_ID = os.environ.get('PLAID_CLIENT_ID')
+PLAID_SECRET = os.environ.get('PLAID_SECRET')
+
 plaid_client = plaid.ApiClient(
     plaid.Configuration(
-        host=plaid.Environment.Sandbox,
+        host=plaid_env,
         api_key={
-            'clientId': os.getenv('PLAID_CLIENT_ID'),
-            'secret': os.getenv('PLAID_SECRET'),
+            'clientId': PLAID_CLIENT_ID,
+            'secret': PLAID_SECRET,
         }
     )
 )
-
 plaid_api = plaid_api.PlaidApi(plaid_client)
 
 # Database Models
@@ -92,6 +102,7 @@ class Account(db.Model):
     current_balance = db.Column(db.Float, default=0.0)
     available_balance = db.Column(db.Float, default=0.0)
     last_updated = db.Column(db.DateTime, default=datetime.utcnow)
+    plaid_access_token = db.Column(db.String(255), nullable=False)
 
 class Transaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -140,7 +151,7 @@ def register():
     db.session.add(user)
     db.session.commit()
     
-    access_token = create_access_token(identity=user.id)
+    access_token = create_access_token(identity=str(user.id))
     return jsonify({
         'message': 'User registered successfully',
         'access_token': access_token,
@@ -158,7 +169,42 @@ def login():
     user = User.query.filter_by(email=data['email']).first()
     
     if user and bcrypt.check_password_hash(user.password_hash, data['password']):
-        access_token = create_access_token(identity=user.id)
+        access_token = create_access_token(identity=str(user.id))
+        # Sync Plaid transactions for real-time threat detection
+        try:
+            # For each account, sync transactions from Plaid
+            all_transactions = []
+            for account in user.accounts:
+                request_obj = TransactionsSyncRequest(
+                    access_token=account.plaid_access_token,
+                    options={'include_personal_finance_category': True}
+                )
+                response = plaid_api.transactions_sync(request_obj)
+                for transaction in response.added:
+                    existing_transaction = Transaction.query.filter_by(
+                        plaid_transaction_id=transaction.transaction_id
+                    ).first()
+                    if not existing_transaction:
+                        fraud_score = calculate_fraud_score(transaction, user)
+                        new_transaction = Transaction(
+                            user_id=user.id,
+                            account_id=account.id,
+                            plaid_transaction_id=transaction.transaction_id,
+                            amount=transaction.amount,
+                            date=transaction.date,
+                            name=transaction.name,
+                            merchant_name=transaction.merchant_name,
+                            category=transaction.category[0] if transaction.category else None,
+                            category_id=transaction.category_id,
+                            pending=transaction.pending,
+                            fraud_score=fraud_score,
+                            is_fraudulent=fraud_score > 0.7
+                        )
+                        db.session.add(new_transaction)
+                        all_transactions.append(new_transaction)
+            db.session.commit()
+        except Exception as e:
+            print(f"[LOGIN] Plaid sync failed: {e}")
         return jsonify({
             'message': 'Login successful',
             'access_token': access_token,
@@ -176,66 +222,88 @@ def login():
 @app.route('/api/plaid/create-link-token', methods=['POST'])
 @jwt_required()
 def create_link_token():
-    user_id = get_jwt_identity()
-    
-    request_obj = LinkTokenCreateRequest(
-        products=[Products("transactions")],
-        client_name="BiGuard",
-        country_codes=[CountryCode("US")],
-        language="en",
-        user=LinkTokenCreateRequestUser(
-            client_user_id=str(user_id)
+    user_id = str(get_jwt_identity())
+    print(f"[DEBUG] /api/plaid/create-link-token called. JWT identity: {user_id}")
+    print(f"[DEBUG] Authorization header: {request.headers.get('Authorization')}")
+    try:
+        request_obj = LinkTokenCreateRequest(
+            products=[Products("transactions")],
+            client_name="BiGuard",
+            country_codes=[CountryCode("US")],
+            language="en",
+            user=LinkTokenCreateRequestUser(
+                client_user_id=str(user_id)
+            )
         )
-    )
-    
-    response = plaid_api.link_token_create(request_obj)
-    return jsonify({'link_token': response.link_token})
+        response = plaid_api.link_token_create(request_obj)
+        return jsonify({'link_token': response.link_token})
+    except Exception as e:
+        print(f"Plaid link token creation error: {e}")
+        return jsonify({'error': 'Could not create Plaid link token', 'details': str(e)}), 500
 
 @app.route('/api/plaid/exchange-token', methods=['POST'])
 @jwt_required()
 def exchange_token():
     user_id = get_jwt_identity()
+
     data = request.get_json()
-    
-    request_obj = ItemPublicTokenExchangeRequest(
-        public_token=data['public_token']
-    )
-    
-    response = plaid_api.item_public_token_exchange(request_obj)
-    access_token = response.access_token
-    
-    # Get accounts
-    accounts_request = AccountsGetRequest(access_token=access_token)
-    accounts_response = plaid_api.accounts_get(accounts_request)
-    
-    # Save accounts to database
-    for account in accounts_response.accounts:
-        existing_account = Account.query.filter_by(plaid_account_id=account.account_id).first()
-        if not existing_account:
-            new_account = Account(
-                user_id=user_id,
-                plaid_account_id=account.account_id,
-                name=account.name,
-                type=account.type,
-                subtype=account.subtype,
-                mask=account.mask,
-                current_balance=account.balances.current,
-                available_balance=account.balances.available
-            )
-            db.session.add(new_account)
-    
-    db.session.commit()
-    
-    return jsonify({'message': 'Bank account connected successfully'})
+    public_token = data.get('public_token')
+    remember_account = data.get('remember_account', True)  # Default True
+    if not public_token:
+        return jsonify({'error': 'Missing public_token'}), 400
+
+    try:
+        exchange_request = ItemPublicTokenExchangeRequest(
+            public_token=public_token
+        )
+        exchange_response = plaid_api.item_public_token_exchange(exchange_request)
+        access_token = exchange_response.access_token
+
+        # Get accounts
+        accounts_request = AccountsGetRequest(access_token=access_token)
+        accounts_response = plaid_api.accounts_get(accounts_request)
+
+        if remember_account:
+            # Save only checking and savings accounts to database
+            for account in accounts_response.accounts:
+                # Only keep depository accounts with subtype checking or savings
+                if str(account.type).lower() == 'depository' and str(account.subtype).lower() in ['checking', 'savings']:
+                    existing_account = Account.query.filter_by(plaid_account_id=account.account_id).first()
+                    if not existing_account:
+                        new_account = Account(
+                            user_id=user_id,
+                            plaid_account_id=account.account_id,
+                            name=account.name,
+                            type=str(account.type) if account.type else None,
+                            subtype=str(account.subtype) if account.subtype else None,
+                            mask=account.mask,
+                            institution_name=getattr(account, 'institution_name', None),
+                            current_balance=account.balances.current,
+                            available_balance=account.balances.available,
+                            plaid_access_token=access_token
+                        )
+                        db.session.add(new_account)
+            db.session.commit()
+            return jsonify({'message': 'Bank account connected successfully'})
+        else:
+            # Do not save account, just return success
+            return jsonify({'message': 'Bank account linked for this session only'})
+    except Exception as e:
+        print(f"Plaid token exchange error: {e}")
+        return jsonify({'error': 'Could not exchange token', 'details': str(e)}), 500
 
 @app.route('/api/transactions/sync', methods=['POST'])
 @jwt_required()
 def sync_transactions():
     user_id = get_jwt_identity()
+    print(f"[DEBUG] /api/transactions/sync called. JWT identity: {user_id}")
+    print(f"[DEBUG] Authorization header: {request.headers.get('Authorization')}")
     user = User.query.get(user_id)
     
     all_transactions = []
-    
+    seen_transaction_ids = set()
+    # Preload all existing transaction IDs for this user from DB
+    existing_ids = set([t.plaid_transaction_id for t in Transaction.query.filter_by(user_id=user_id).all()])
     for account in user.accounts:
         # Get transactions from Plaid
         request_obj = TransactionsSyncRequest(
@@ -244,25 +312,27 @@ def sync_transactions():
                 'include_personal_finance_category': True
             }
         )
-        
         response = plaid_api.transactions_sync(request_obj)
-        
-        for transaction in response.added:
-            # Check if transaction already exists
-            existing_transaction = Transaction.query.filter_by(
-                plaid_transaction_id=transaction.transaction_id
-            ).first()
-            
-            if not existing_transaction:
+        with db.session.no_autoflush:
+            for transaction in response.added:
+                txn_id = transaction.transaction_id
+                # Add txn_id to seen_transaction_ids immediately
+                if txn_id in existing_ids or txn_id in seen_transaction_ids:
+                    seen_transaction_ids.add(txn_id)
+                    continue
+                # Final DB check for bulletproof deduplication
+                if Transaction.query.filter_by(plaid_transaction_id=txn_id).first():
+                    seen_transaction_ids.add(txn_id)
+                    continue
+                seen_transaction_ids.add(txn_id)
                 # Calculate fraud score
                 fraud_score = calculate_fraud_score(transaction, user)
-                
                 new_transaction = Transaction(
                     user_id=user_id,
                     account_id=account.id,
-                    plaid_transaction_id=transaction.transaction_id,
+                    plaid_transaction_id=txn_id,
                     amount=transaction.amount,
-                    date=datetime.strptime(transaction.date, '%Y-%m-%d').date(),
+                    date=transaction.date,
                     name=transaction.name,
                     merchant_name=transaction.merchant_name,
                     category=transaction.category[0] if transaction.category else None,
@@ -271,12 +341,9 @@ def sync_transactions():
                     fraud_score=fraud_score,
                     is_fraudulent=fraud_score > 0.7  # Threshold for fraud detection
                 )
-                
                 db.session.add(new_transaction)
                 all_transactions.append(new_transaction)
-    
     db.session.commit()
-    
     return jsonify({
         'message': f'Synced {len(all_transactions)} new transactions',
         'transactions': [{
@@ -297,7 +364,10 @@ def get_transactions():
     
     # Get query parameters
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    # Allow up to 200 per page
+    if per_page > 200:
+        per_page = 200
     category = request.args.get('category')
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
@@ -339,55 +409,90 @@ def get_transactions():
 def get_dashboard_stats():
     try:
         user_id = get_jwt_identity()
-        print(f"Dashboard stats requested for user_id={user_id}")
+        print(f"[DEBUG] /api/dashboard/stats called. JWT identity: {user_id}")
+        print(f"[DEBUG] Authorization header: {request.headers.get('Authorization')}")
         user = User.query.get(user_id)
-        print(f"User object: {user}")
+        print(f"[DEBUG] User object: {user}")
         if user:
-            print(f"User first name: {user.first_name}, last name: {user.last_name}")
+            print(f"[DEBUG] User first name: {user.first_name}, last name: {user.last_name}")
 
         # Get date range (last 30 days)
         end_date = datetime.now().date()
         start_date = end_date - timedelta(days=30)
 
-        # Get transactions for the period
-        transactions = Transaction.query.filter(
-            Transaction.user_id == user_id,
-            Transaction.date >= start_date,
-            Transaction.date <= end_date
-        ).all()
+        # Separate accounts by type
+        checking_accounts = [a for a in user.accounts if a.subtype and a.subtype.lower() == 'checking']
+        savings_accounts = [a for a in user.accounts if a.subtype and a.subtype.lower() == 'savings']
 
-        # Calculate statistics
-        total_spent = sum(t.amount for t in transactions if t.amount < 0)
-        total_income = sum(t.amount for t in transactions if t.amount > 0)
+        # Fetch budgets for this user (per category)
+        user_budgets = Budget.query.filter_by(user_id=user_id).all()
+        budgets_by_category = {}
+        for b in user_budgets:
+            budgets_by_category[b.category] = {
+                'amount': b.amount,
+                'period': b.period
+            }
 
-        # Category breakdown
-        category_totals = {}
-        for transaction in transactions:
-            if transaction.category:
-                if transaction.category not in category_totals:
-                    category_totals[transaction.category] = 0
-                category_totals[transaction.category] += abs(transaction.amount)
-
-        # Fraud alerts
-        fraud_alerts = [t for t in transactions if t.is_fraudulent]
+        def get_account_stats(accounts, include_budgets=False):
+            account_ids = [a.id for a in accounts]
+            transactions = Transaction.query.filter(
+                Transaction.user_id == user_id,
+                Transaction.account_id.in_(account_ids),
+                Transaction.date >= start_date,
+                Transaction.date <= end_date
+            ).all() if account_ids else []
+            total_spent = sum(t.amount for t in transactions if t.amount < 0)
+            total_income = sum(t.amount for t in transactions if t.amount > 0)
+            # Calculate monthly net income (sum of positive transactions in last 30 days)
+            monthly_net_income = sum(t.amount for t in transactions if t.amount > 0)
+            category_totals = {}
+            for transaction in transactions:
+                if transaction.category:
+                    if transaction.category not in category_totals:
+                        category_totals[transaction.category] = 0
+                    category_totals[transaction.category] += abs(transaction.amount)
+            fraud_alerts = [t for t in transactions if t.is_fraudulent]
+            current_balance = sum(a.current_balance or 0.0 for a in accounts)
+            result = {
+                'accounts': [{'id': a.id, 'name': a.name, 'current_balance': a.current_balance} for a in accounts],
+                'total_spent': abs(total_spent),
+                'total_income': total_income,
+                'monthly_net_income': monthly_net_income,
+                'net_flow': total_income + total_spent,
+                'category_breakdown': category_totals,
+                'fraud_alerts_count': len(fraud_alerts),
+                'fraud_alerts': [{
+                    'id': t.id,
+                    'amount': t.amount,
+                    'name': t.name,
+                    'date': t.date.strftime('%Y-%m-%d'),
+                    'fraud_score': t.fraud_score
+                } for t in fraud_alerts[:5]],
+                'current_balance': current_balance,
+                'transactions': [{
+                    'id': t.id,
+                    'amount': t.amount,
+                    'name': t.name,
+                    'date': t.date.strftime('%Y-%m-%d'),
+                    'category': t.category,
+                    'merchant_name': t.merchant_name,
+                    'fraud_score': t.fraud_score,
+                    'is_fraudulent': t.is_fraudulent,
+                    'pending': t.pending
+                } for t in transactions]
+            }
+            if include_budgets:
+                # Attach budgets for each category
+                result['budgets'] = {cat: budgets_by_category.get(cat) for cat in category_totals.keys()}
+            return result
 
         return jsonify({
             'user': {
                 'firstName': user.first_name if user else '',
                 'lastName': user.last_name if user else ''
             },
-            'total_spent': abs(total_spent),
-            'total_income': total_income,
-            'net_flow': total_income + total_spent,
-            'category_breakdown': category_totals,
-            'fraud_alerts_count': len(fraud_alerts),
-            'fraud_alerts': [{
-                'id': t.id,
-                'amount': t.amount,
-                'name': t.name,
-                'date': t.date.strftime('%Y-%m-%d'),
-                'fraud_score': t.fraud_score
-            } for t in fraud_alerts[:5]]  # Show only first 5 alerts
+            'checking': get_account_stats(checking_accounts, include_budgets=True),
+            'savings': get_account_stats(savings_accounts)
         })
     except Exception as e:
         import traceback
@@ -416,7 +521,11 @@ def calculate_fraud_score(transaction, user):
     amount_ratio = amount / avg_amount if avg_amount > 0 else 1
     
     # Time-based features
-    transaction_date = datetime.strptime(transaction.date, '%Y-%m-%d').date()
+    # transaction.date may be a string or a date object
+    if isinstance(transaction.date, str):
+        transaction_date = datetime.strptime(transaction.date, '%Y-%m-%d').date()
+    else:
+        transaction_date = transaction.date
     recent_transactions = [t for t in user_transactions if (transaction_date - t.date).days <= 7]
     
     # Location-based features (simplified)
@@ -472,6 +581,70 @@ def calculate_fraud_score(transaction, user):
     
     return min(fraud_score, 1.0)  # Cap at 1.0
 
+
+# Balance over time endpoint
+@app.route('/api/accounts/balance-history', methods=['GET'])
+@jwt_required()
+def get_balance_history():
+    """
+    Returns running balance over time for each account and total, based on latest Plaid balance and transactions.
+    """
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    accounts = user.accounts
+    result = []
+    total_balance_by_date = {}
+
+    for account in accounts:
+        # Get all transactions for this account, sorted by date descending
+        txns = Transaction.query.filter_by(account_id=account.id).order_by(Transaction.date.desc()).all()
+        # Start from the latest known balance
+        running_balance = account.current_balance or 0.0
+        history = []
+        last_date = None
+        for txn in txns:
+            # Record balance at this date (after this transaction)
+            history.append({
+                'date': txn.date.strftime('%Y-%m-%d'),
+                'balance': running_balance
+            })
+            # Subtract/add transaction amount (Plaid: negative = spent, positive = income)
+            running_balance -= txn.amount
+            last_date = txn.date
+        # Optionally, add the oldest balance (after all txns)
+        if last_date:
+            history.append({
+                'date': (last_date - timedelta(days=1)).strftime('%Y-%m-%d'),
+                'balance': running_balance
+            })
+        # Reverse to chronological order
+        history = list(reversed(history))
+        # Add to result
+        result.append({
+            'account_id': account.id,
+            'account_name': account.name,
+            'history': history
+        })
+        # Merge into total_balance_by_date
+        for point in history:
+            d = point['date']
+            total_balance_by_date.setdefault(d, 0.0)
+            total_balance_by_date[d] += point['balance']
+
+    # Build total balance history (by date, sorted)
+    total_history = [
+        {'date': d, 'balance': total_balance_by_date[d]}
+        for d in sorted(total_balance_by_date.keys())
+    ]
+
+    return jsonify({
+        'accounts': result,
+        'total': total_history
+    })
+
 # Budget management
 @app.route('/api/budgets', methods=['GET'])
 @jwt_required()
@@ -509,7 +682,72 @@ def create_budget():
         'period': budget.period
     }), 201
 
+# Utility: Generate a lot of Plaid sandbox transactions for ML training
+from plaid.model.sandbox_item_fire_webhook_request import SandboxItemFireWebhookRequest
+
+@app.route('/api/plaid/sandbox/generate-transactions', methods=['POST'])
+@jwt_required()
+def generate_sandbox_transactions():
+    """
+    For all linked Plaid accounts for the current user, fire the sandbox webhook multiple times to generate a large number of transactions, then sync.
+    """
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    count = 0
+    for account in user.accounts:
+        access_token = account.plaid_access_token
+        # Fire the webhook multiple times to generate more transactions
+        for _ in range(10):  # 10x = 1000+ transactions in sandbox
+            try:
+                req = SandboxItemFireWebhookRequest(
+                    access_token=access_token,
+                    webhook_code='DEFAULT_UPDATE'
+                )
+                plaid_api.sandbox_item_fire_webhook(req)
+                count += 1
+            except Exception as e:
+                print(f"[SANDBOX] Error firing webhook for account {account.id}: {e}")
+    # After firing, sync transactions
+    try:
+        # Reuse the sync_transactions logic
+        with app.test_request_context():
+            resp = sync_transactions()
+        return jsonify({'message': f'Fired {count} webhooks and synced transactions for all accounts.'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts', methods=['GET'])
+@jwt_required()
+def get_accounts():
+    print('[DEBUG] /api/accounts endpoint called')
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    if not user:
+        print('[DEBUG] User not found for /api/accounts')
+        return jsonify({'error': 'User not found'}), 404
+    accounts = user.accounts
+    result = []
+    for account in accounts:
+        result.append({
+            'id': account.id,
+            'name': account.name,
+            'type': account.type,
+            'subtype': account.subtype,
+            'mask': account.mask,
+            'institution_name': account.institution_name,
+            'current_balance': account.current_balance,
+            'available_balance': account.available_balance,
+            'last_updated': account.last_updated.strftime('%Y-%m-%d %H:%M:%S') if account.last_updated else None
+        })
+    print(f'[DEBUG] Returning {len(result)} accounts for user {user_id}')
+    return jsonify(result)
+
+print('[DEBUG] /api/accounts endpoint registered')
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    # Disable auto-reloader to preserve environment variables
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
