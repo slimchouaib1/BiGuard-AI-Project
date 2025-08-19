@@ -273,10 +273,41 @@ class AnomalyDetector:
             else:
                 fraudulent_collection = self.fraudulent_transactions_collection
             
-            # Get all fraudulent transactions for this user
+            # Get all fraudulent transactions for this user from the fraudulent collections
             fraudulent_transactions = list(fraudulent_collection.find({
                 'user_id': str(user_id)
             }).sort('detected_at', -1))
+            
+            # Also get transactions that are already marked as fraudulent in the main transactions collection
+            if data_type == 'sample':
+                query = {'user_id': str(user_id), 'is_sample': True, 'is_fraudulent': True}
+            else:
+                query = {'user_id': str(user_id), 'is_sample': {'$ne': True}, 'is_fraudulent': True}
+            
+            already_fraudulent_transactions = list(self.transactions_collection.find(query))
+            
+            # Convert already fraudulent transactions to the same format
+            for tx in already_fraudulent_transactions:
+                # Check if this transaction is already in the fraudulent collection
+                existing = fraudulent_collection.find_one({
+                    'original_transaction_id': str(tx['_id'])
+                })
+                
+                if not existing:
+                    # Add it to the fraudulent collection
+                    fraudulent_tx = {
+                        'original_transaction_id': str(tx.get('_id')),
+                        'user_id': str(user_id),
+                        'transaction_data': tx,
+                        'anomaly_score': tx.get('fraud_score', 0.8),  # Use fraud_score if available
+                        'reasons': tx.get('anomaly_flags', ['Pre-marked as fraudulent']),
+                        'severity': 'high' if tx.get('fraud_score', 0) > 0.8 else 'medium' if tx.get('fraud_score', 0) > 0.6 else 'low',
+                        'detected_at': tx.get('created_at', datetime.utcnow()),
+                        'is_sample': data_type == 'sample',
+                        'status': 'blocked'
+                    }
+                    fraudulent_collection.insert_one(fraudulent_tx)
+                    fraudulent_transactions.append(fraudulent_tx)
             
             if not fraudulent_transactions:
                 return {
@@ -346,16 +377,28 @@ class AnomalyDetector:
     def clear_fraudulent_transactions(self, user_id, data_type='real'):
         """Clear all fraudulent transactions for a user"""
         try:
+            # Clear from fraudulent collections
             if data_type == 'sample':
                 result = self.sample_fraudulent_transactions_collection.delete_many({
                     'user_id': str(user_id)
                 })
+                # Also clear from main transactions collection
+                main_result = self.transactions_collection.update_many(
+                    {'user_id': str(user_id), 'is_sample': True, 'is_fraudulent': True},
+                    {'$unset': {'is_fraudulent': '', 'anomaly_flags': '', 'fraud_score': ''}}
+                )
             else:
                 result = self.fraudulent_transactions_collection.delete_many({
                     'user_id': str(user_id)
                 })
+                # Also clear from main transactions collection
+                main_result = self.transactions_collection.update_many(
+                    {'user_id': str(user_id), 'is_sample': {'$ne': True}, 'is_fraudulent': True},
+                    {'$unset': {'is_fraudulent': '', 'anomaly_flags': '', 'fraud_score': ''}}
+                )
             
             return result.deleted_count
+            
         except Exception as e:
             print(f"Error clearing fraudulent transactions: {e}")
             return 0
