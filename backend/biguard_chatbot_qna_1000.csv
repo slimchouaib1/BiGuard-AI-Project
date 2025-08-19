@@ -1,0 +1,80 @@
+Question,Answer
+What category is Starbucks $5.75?,That looks like Food & Drinks.
+What category is Netflix $15.99?,That looks like Subscriptions.
+What category is Uber $22.50?,That looks like Travel.
+What category is Amazon $120.45?,That looks like Shopping.
+What category is Shell Gas $40.00?,That looks like Bills & Utilities.
+What category is Gym Membership $45?,That looks like Fitness & Sports.
+What category is Insurance Payment $200?,That looks like Insurance & Financial.
+What category is Electric Bill $90?,That looks like Bills & Utilities.
+What category is Movie Theater $30?,That looks like Entertainment.
+What category is Apple Store $999?,That looks like Shopping.
+What category is Hotel Booking $300?,That looks like Travel.
+What category is Coffee Shop $4.50?,That looks like Food & Drinks.
+What category is Phone Bill $60?,That looks like Bills & Utilities.
+What category is Clothing Store $70?,That looks like Shopping.
+What category is Flight Ticket $450?,That looks like Travel.
+What category is Amazon Prime $12.99?,That looks like Subscriptions.
+What category is Pharmacy $25?,That looks like Health & Wellness.
+What category is Car Repair $350?,That looks like Auto & Transport.
+What category is Uber Eats $28?,That looks like Food & Drinks.
+What category is Disney+ $7.99?,That looks like Subscriptions.
+What category is Concert Ticket $120?,That looks like Entertainment.
+What category is Dentist $100?,That looks like Health & Wellness.
+How do I set a budget for groceries?,"Go to the Budgets page, select Food & Drinks, set your amount, and save."
+Can I create a budget for travel?,"Yes, you can add a Travel budget from the Budgets page."
+How do I delete a budget?,"On the Budgets page, click Delete next to the budget you no longer need."
+Can I edit a budget amount?,"Yes, you can edit budgets directly on the Budgets page."
+Can I set a weekly budget?,"Yes, BiGuard supports weekly, monthly, and yearly budgets."
+What happens if I go over budget?,You'll see alerts and tips in your dashboard when you overspend.
+Can I set multiple budgets?,"Yes, you can set a budget per category."
+Do budgets reset automatically?,"Yes, they reset each week, month, or year depending on the period you set."
+How to view all my budgets?,Go to the Budgets page to see all your active budgets.
+Can I set a yearly budget?,"Yes, yearly budgets are supported."
+Can I set a budget for shopping?,"Yes, just select Shopping as the category when creating a budget."
+Can I get alerts when I near my budget?,"Yes, BiGuard notifies you if you're close to overspending."
+Can I increase my budget later?,"Yes, you can edit your budget anytime."
+Do budgets apply across accounts?,"Yes, budgets track spending across all linked accounts."
+What categories can I budget for?,"Categories include Food, Travel, Shopping, Bills, Subscriptions, and more."
+Can I budget for subscriptions?,"Yes, select Subscriptions when adding a budget."
+Can I budget for fitness?,"Yes, select Fitness & Sports when creating a budget."
+Do I need to set budgets?,"No, budgets are optional but recommended for better money management."
+Can I budget for entertainment?,"Yes, just choose Entertainment as your category."
+Can I set a budget for health expenses?,"Yes, choose Health & Wellness when adding a budget."
+What's the minimum budget amount?,You can set any amount above $0.
+How do I know if I'm over budget?,Check your dashboard — overspending is highlighted.
+What is Plaid?,Plaid securely connects your bank accounts to BiGuard.
+Is Plaid safe?,"Yes, Plaid uses strong encryption and never shares your credentials with BiGuard."
+Why do I log into my bank with Plaid?,Plaid handles authentication securely — BiGuard never sees your login info.
+Can I connect multiple banks with Plaid?,"Yes, you can link multiple accounts using Plaid."
+What happens if Plaid fails?,"You can try reconnecting your account, or contact support."
+Does Plaid support credit cards?,"Yes, Plaid can link credit, debit, and bank accounts."
+How fast does Plaid update transactions?,Plaid can sync transactions in near real-time using webhooks.
+Can I remove a bank from Plaid?,"Yes, you can unlink accounts in your BiGuard dashboard."
+Do I need Plaid for BiGuard to work?,"Yes, Plaid is required to fetch live account data."
+Does Plaid cost money?,"No, Plaid integration is free for BiGuard users."
+What if my bank isn't supported?,"Plaid supports most major banks — if yours isn't listed, you can request support."
+Can Plaid see my password?,"No, Plaid never stores or shares your password."
+Does Plaid support PayPal?,"Plaid mainly connects banks and cards, not PayPal accounts."
+What regions does Plaid support?,"Plaid is available in the US, Canada, UK, and parts of Europe."
+Why is Plaid asking me security questions?,Your bank may require extra verification through Plaid.
+Can I reconnect Plaid if it expires?,"Yes, you can re-link your account at any time."
+Does Plaid update balances too?,"Yes, Plaid syncs both balances and transactions."
+Can Plaid connect savings accounts?,"Yes, Plaid supports checking and savings accounts."
+What does BiGuard use Plaid for?,To securely fetch your account balances and transactions.
+Does Plaid notify me of fraud?,"No, BiGuard detects fraud after Plaid provides your transactions."
+What can you do?,"I can answer questions about your transactions, budgets, and Plaid integration."
+Who are you?,"I'm BiGuard AI, your personal finance assistant."
+Can you give investment advice?,"I focus on transactions, budgets, and Plaid integration — not investments."
+What happens if I ask something random?,I'll remind you that I handle finances — try asking about transactions or budgets.
+Can you check my balance?,I don't fetch balances directly — check your dashboard for that.
+Can you categorize my spending?,"Yes, I can classify example transactions into categories."
+Do you learn over time?,"I use a trained model for categorization, but I don't learn continuously."
+Can I chat with you about fraud?,Fraud detection is automatic — I can explain how it works if you ask.
+Are you like ChatGPT?,I'm simpler — I focus only on BiGuard's finance features.
+Do you replace my financial advisor?,"No, I just help with budgets, Plaid, and transaction categorization."
+Can you export my data?,I can't — use the dashboard export tools instead.
+Do you support multiple users?,"Yes, BiGuard accounts are per user."
+Can I ask you about my savings?,I can explain how savings are shown in the dashboard.
+What happens if I ask about crypto?,"I'm focused on bank transactions, not crypto for now."
+How do I start using BiGuard?,"Sign up, connect your bank via Plaid, and start tracking budgets."

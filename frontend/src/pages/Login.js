@@ -18,8 +18,9 @@ const Login = () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Login failed');
-      // Store access token for API calls
+      // Store access token and user_id for API calls
       localStorage.setItem('access_token', data.access_token);
+      if (data.user_id) localStorage.setItem('user_id', data.user_id);
       // Redirect or show success
       window.location.href = '/dashboard';
     } catch (err) {

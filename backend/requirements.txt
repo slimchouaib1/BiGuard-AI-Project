@@ -1,13 +1,16 @@
+pymongo
+pandas
+scikit-learn
 Flask==2.3.3
 Flask-CORS==4.0.0
 Flask-SQLAlchemy==3.0.5
 Flask-JWT-Extended==4.5.3
 Flask-Bcrypt==1.0.1
-plaid-python
- flask
- flask_sqlalchemy
- flask_jwt_extended
- pyodbc
+plaid-python==12.0.0
+flask
+flask_sqlalchemy
+flask_jwt_extended
+pyodbc
 pandas==2.0.3
 numpy==1.24.3
 python-dotenv==1.0.0
@@ -22,3 +25,9 @@ cryptography==41.0.4
 bcrypt==4.0.1 
 azure-identity
 scikit-learn
+groq==0.4.2
+llama-index==0.10.0
+sentence-transformers==2.2.2
+torch==2.0.1
+transformers==4.30.2
+joblib==1.5.1

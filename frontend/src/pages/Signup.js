@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { PlaidLink } from 'react-plaid-link';
 
 const Signup = () => {
   const [form, setForm] = useState({
@@ -13,8 +12,6 @@ const Signup = () => {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [linkToken, setLinkToken] = useState(null);
-  const [showPlaid, setShowPlaid] = useState(false);
 
   const handleChange = e => {
     const { name, value, type, checked } = e.target;
@@ -46,17 +43,13 @@ const Signup = () => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Registration failed');
-      // Store access token for Plaid API calls
+      
+      // Store access token and user_id
       localStorage.setItem('access_token', data.access_token);
-      // Get Plaid link token
-      const plaidRes = await fetch('/api/plaid/create-link-token', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${data.access_token}` }
-      });
-      const plaidData = await plaidRes.json();
-      if (!plaidRes.ok || !plaidData.link_token) throw new Error('Could not create Plaid link token');
-      setLinkToken(plaidData.link_token);
-      setShowPlaid(true);
+      if (data.user && data.user.id) localStorage.setItem('user_id', data.user.id);
+      
+      // Redirect directly to dashboard (no automatic Plaid linking)
+      window.location.href = '/dashboard';
     } catch (err) {
       setError(err.message);
     } finally {
@@ -64,26 +57,7 @@ const Signup = () => {
     }
   };
 
-  // Plaid Link success handler
-  const handlePlaidSuccess = async (publicToken) => {
-    const token = localStorage.getItem('access_token');
-    try {
-      const response = await fetch('/api/plaid/exchange-token', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ public_token: publicToken, remember_account: true })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Plaid token exchange failed');
-      // Redirect to dashboard after successful linking
-      window.location.href = '/dashboard';
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -109,24 +83,7 @@ const Signup = () => {
             <h1 className="text-2xl font-bold text-biguard-gray">Create Your Account</h1>
             <p className="text-gray-600 mt-2">Join thousands of users who trust BiGuard with their financial security</p>
           </div>
-          {/* Show Plaid Link after signup, otherwise show signup form */}
-          {showPlaid && linkToken ? (
-            <div className="flex flex-col items-center justify-center">
-              <h2 className="text-xl font-semibold mb-4">Link your bank account to get started</h2>
-              <PlaidLink
-                token={linkToken}
-                onSuccess={handlePlaidSuccess}
-                className="bg-biguard-orange text-white px-6 py-3 rounded-lg font-semibold shadow hover:bg-orange-600 transition-colors text-lg flex items-center gap-2"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                Link Bank Account
-              </PlaidLink>
-              <div className="mt-4 text-gray-500 text-sm">You must link a bank account to use BiGuard.</div>
-              {error && <div className="text-red-500 text-sm mt-2">{error}</div>}
-            </div>
-          ) : (
-            <>
-              <form className="space-y-4" onSubmit={handleSubmit}>
+          <form className="space-y-4" onSubmit={handleSubmit}>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
@@ -173,8 +130,6 @@ const Signup = () => {
                   Already have an account? <a href="/login" className="text-biguard-orange hover:underline font-medium">Sign in here</a>
                 </p>
               </div>
-            </>
-          )}
         </div>
       </div>
     </div>
