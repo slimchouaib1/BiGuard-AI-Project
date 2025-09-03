@@ -128,6 +128,18 @@ const Budgets = () => {
             <a href="/budgets" className="text-[#FF6A00] font-medium">Budgets</a>
             <a href="/savings" className="text-[#FF6A00] font-medium">Savings</a>
           </nav>
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={() => {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user_id');
+                window.location.href = '/';
+              }}
+              className="text-gray-500 hover:text-gray-700 text-sm"
+            >
+              Logout
+            </button>
+          </div>
         </div>
       </header>
       <section className="w-full py-12 md:py-20 lg:py-28 xl:py-32">

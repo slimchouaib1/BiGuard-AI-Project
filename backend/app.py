@@ -54,6 +54,7 @@ db = client['biguard']
 users_collection = db['users']
 accounts_collection = db['accounts']
 transactions_collection = db['transactions']
+fraudulent_transactions_collection = db['fraudulent_transactions']
 budgets_collection = db['budgets']
 
 # Plaid client configuration
@@ -881,8 +882,46 @@ def sync_plaid_transactions(user_id, account_id, access_token):
                     'transaction_type': transaction_type,
                     'created_at': datetime.utcnow()
                 }
-                transactions_collection.insert_one(new_transaction)
+                
+                # Insert transaction
+                result = transactions_collection.insert_one(new_transaction)
+                new_transaction['_id'] = result.inserted_id
                 synced_count += 1
+                
+                # Real-time anomaly detection for new transaction
+                try:
+                    # Auto-train model if needed (every 50 transactions)
+                    transaction_count = transactions_collection.count_documents({'user_id': str(user_id)})
+                    if transaction_count % 50 == 0:
+                        print(f"[ANOMALY] Auto-training model after {transaction_count} transactions")
+                        anomaly_detector.train_model(user_id, 'real')
+                    
+                    # Real-time detection for this specific transaction
+                    anomaly_result = anomaly_detector.detect_single_transaction(new_transaction, user_id, 'real')
+                    
+                    if anomaly_result:
+                        # Update transaction with anomaly details
+                        transactions_collection.update_one(
+                            {'_id': new_transaction['_id']},
+                            {
+                                '$set': {
+                                    'is_fraudulent': True,
+                                    'fraud_score': anomaly_result.get('anomaly_score', 0.8),
+                                    'anomaly_severity': anomaly_result.get('severity', 'medium'),
+                                    'anomaly_reasons': anomaly_result.get('reasons', []),
+                                    'threat_level': anomaly_result.get('threat_level', 'medium'),
+                                    'blocked': True  # Block fraudulent transactions
+                                }
+                            }
+                        )
+                        print(f"[ANOMALY] 🚨 Fraudulent transaction detected and blocked: {new_transaction['name']} - ${new_transaction['amount']}")
+                        print(f"[ANOMALY] Severity: {anomaly_result.get('severity')}, Score: {anomaly_result.get('anomaly_score')}")
+                        print(f"[ANOMALY] Reasons: {', '.join(anomaly_result.get('reasons', []))}")
+                        print(f"[ANOMALY] Threat Level: {anomaly_result.get('threat_level')}")
+                            
+                except Exception as e:
+                    print(f"[ANOMALY] Error in real-time detection: {e}")
+                    # Continue processing even if anomaly detection fails
         
         print(f"[SYNC] Successfully synced {synced_count} transactions for date range")
         
@@ -973,28 +1012,117 @@ def get_dashboard_stats():
             # Use all_transactions for the transactions list (frontend will filter as needed)
             transactions = all_transactions
 
-            # Totals for month-to-date - properly handle income vs expenses
-            total_spent = sum(t['amount'] for t in monthly_transactions if t.get('is_expense', True))
-            total_income = sum(t['amount'] for t in monthly_transactions if not t.get('is_expense', True))
+            # Totals for month-to-date - properly handle income vs expenses (EXCLUDE BLOCKED TRANSACTIONS)
+            total_spent = sum(t['amount'] for t in monthly_transactions if t.get('is_expense', True) and not t.get('blocked', False))
+            total_income = sum(t['amount'] for t in monthly_transactions if not t.get('is_expense', True) and not t.get('blocked', False))
 
             monthly_income = total_income
             monthly_expenses = total_spent
             monthly_net_income = monthly_income - monthly_expenses
 
-            # Category totals for month-to-date (absolute amounts)
+            # Category totals for month-to-date (absolute amounts) - EXCLUDE BLOCKED TRANSACTIONS
             category_totals = {}
             for t in monthly_transactions:
-                cat = t.get('category') or 'Uncategorized'
-                category_totals[cat] = category_totals.get(cat, 0) + abs(t['amount'])
+                if not t.get('blocked', False):  # Skip blocked transactions
+                    cat = t.get('category') or 'Uncategorized'
+                    category_totals[cat] = category_totals.get(cat, 0) + abs(t['amount'])
 
-            fraud_alerts = [t for t in monthly_transactions if t.get('is_fraudulent')]
+            # Get fraud alerts from the fraudulent_transactions collection
+            fraud_alerts_query = {'user_id': user_id}
+            if user.get('has_sample_data', False):
+                fraud_alerts_query['is_sample'] = True
+            else:
+                fraud_alerts_query['is_sample'] = {'$ne': True}
+            
+            fraud_alerts = list(fraudulent_transactions_collection.find(fraud_alerts_query).sort('detected_at', -1))
+            
+            # Get real-time anomaly detection summary
+            try:
+                raw_anomaly_summary = anomaly_detector.get_anomaly_summary(user_id, 'real' if not user.get('has_sample_data', False) else 'sample')
+                # Convert to JSON-safe format
+                if raw_anomaly_summary:
+                    anomaly_summary = {
+                        'total_anomalies': raw_anomaly_summary.get('total_anomalies', 0),
+                        'high_severity': raw_anomaly_summary.get('high_severity', 0),
+                        'medium_severity': raw_anomaly_summary.get('medium_severity', 0),
+                        'low_severity': raw_anomaly_summary.get('low_severity', 0),
+                        'risk_level': raw_anomaly_summary.get('risk_level', 'low'),
+                        'recent_anomalies': []
+                    }
+             
+                    if 'fraudulent_transactions' in raw_anomaly_summary:
+                        for tx in raw_anomaly_summary['fraudulent_transactions']:
+                            anomaly_summary['recent_anomalies'].append({
+                                'id': str(tx.get('_id', '')),
+                                'amount': tx.get('amount', 0),
+                                'name': tx.get('name', ''),
+                                'date': tx.get('date', ''),
+                                'severity': tx.get('severity', 'medium'),
+                                'reasons': tx.get('reasons', []),
+                                'merchant_name': tx.get('merchant_name', ''),
+                                'category': tx.get('category', ''),
+                                'blocked': tx.get('blocked', True),
+                                'threat_level': tx.get('threat_level', 'medium'),
+                                'anomaly_score': tx.get('anomaly_score', 0.8)
+                            })
+                else:
+                    anomaly_summary = {
+                        'total_anomalies': len(fraud_alerts),
+                        'high_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'high']),
+                        'medium_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'medium']),
+                        'low_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'low']),
+                        'risk_level': 'high' if len(fraud_alerts) > 0 else 'low',
+                        'recent_anomalies': []
+                    }
+                    
+                    # Add blocked transactions to recent anomalies
+                    for tx in fraud_alerts[:5]:  # Show up to 5 most recent
+                        anomaly_summary['recent_anomalies'].append({
+                            'id': str(tx.get('_id', '')),
+                            'amount': tx.get('amount', 0),
+                            'name': tx.get('name', ''),
+                            'date': tx.get('date', ''),
+                            'severity': tx.get('anomaly_severity', 'medium'),
+                            'reasons': tx.get('anomaly_reasons', []),
+                            'merchant_name': tx.get('merchant_name', ''),
+                            'category': tx.get('category', ''),
+                            'blocked': True,
+                            'threat_level': tx.get('threat_level', 'medium'),
+                            'anomaly_score': tx.get('fraud_score', 0.8)
+                        })
+            except Exception as e:
+                print(f"[DASHBOARD] Error getting anomaly summary: {e}")
+                anomaly_summary = {
+                    'total_anomalies': len(fraud_alerts),
+                    'high_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'high']),
+                    'medium_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'medium']),
+                    'low_severity': len([t for t in fraud_alerts if t.get('anomaly_severity') == 'low']),
+                    'risk_level': 'high' if len(fraud_alerts) > 0 else 'low',
+                    'recent_anomalies': []
+                }
+                
+                # Add blocked transactions to recent anomalies
+                for tx in fraud_alerts[:5]:  # Show up to 5 most recent
+                    anomaly_summary['recent_anomalies'].append({
+                        'id': str(tx.get('_id', '')),
+                        'amount': tx.get('amount', 0),
+                        'name': tx.get('name', ''),
+                        'date': tx.get('date', ''),
+                        'severity': tx.get('anomaly_severity', 'medium'),
+                        'reasons': tx.get('anomaly_reasons', []),
+                        'merchant_name': tx.get('merchant_name', ''),
+                        'category': tx.get('category', ''),
+                        'blocked': True,
+                        'threat_level': tx.get('threat_level', 'medium'),
+                        'anomaly_score': tx.get('fraud_score', 0.8)
+                    })
 
             # Calculate realistic current balance from Plaid account balances
             current_balance = sum(a.get('current_balance', 0.0) or 0.0 for a in accounts)
             if current_balance < 1000:
-                # Use transaction flows to estimate a more realistic balance
-                all_income = sum(t['amount'] for t in all_transactions if not t.get('is_expense', True))
-                all_spent = sum(t['amount'] for t in all_transactions if t.get('is_expense', True))
+                # Use transaction flows to estimate a more realistic balance (EXCLUDE BLOCKED TRANSACTIONS)
+                all_income = sum(t['amount'] for t in all_transactions if not t.get('is_expense', True) and not t.get('blocked', False))
+                all_spent = sum(t['amount'] for t in all_transactions if t.get('is_expense', True) and not t.get('blocked', False))
                 total_flow = all_income - all_spent
                 total_spending = all_spent
                 estimated_starting_balance = max(10000, total_spending + 2000)
@@ -1045,8 +1173,17 @@ def get_dashboard_stats():
                     'amount': t['amount'],
                     'name': t.get('name', ''),
                     'date': t.get('date', ''),
-                    'fraud_score': t.get('fraud_score')
-                } for t in fraud_alerts[:5]],
+                    'fraud_score': t.get('anomaly_score', 0.9),
+                    'anomaly_severity': t.get('severity', 'medium'),
+                    'threat_level': t.get('threat_level', 'medium'),
+                    'anomaly_reasons': t.get('reasons', []),
+                    'blocked': t.get('blocked', True),
+                    'merchant_name': t.get('merchant_name', ''),
+                    'category': t.get('category', ''),
+                    'description': t.get('description', ''),
+                    'detected_at': t.get('detected_at', '')
+                } for t in fraud_alerts[:10]],  # Show up to 10 most recent
+                'anomaly_summary': anomaly_summary,
                 'current_balance': current_balance,
                 'transactions': [{
                     'id': str(t['_id']),
@@ -2146,30 +2283,6 @@ def generate_random_transactions(count=50, user_id=None, account_id=None):
     return transactions
 
 # Anomaly Detection Endpoints
-@app.route('/api/anomaly/train', methods=['POST'])
-@jwt_required()
-def train_anomaly_model():
-    """Train the anomaly detection model for the current user"""
-    try:
-        user_id = get_jwt_identity()
-        
-        # Train model on user's data
-        success = anomaly_detector.train_model(user_id)
-        
-        if success:
-            return jsonify({
-                'message': 'Anomaly detection model trained successfully',
-                'status': 'success'
-            }), 200
-        else:
-            return jsonify({
-                'message': 'Failed to train anomaly detection model',
-                'status': 'error'
-            }), 500
-            
-    except Exception as e:
-        print(f"Error training anomaly model: {e}")
-        return jsonify({'error': 'Failed to train anomaly model'}), 500
 
 @app.route('/api/anomaly/detect', methods=['GET'])
 @jwt_required()
@@ -2177,19 +2290,30 @@ def detect_anomalies():
     """Detect anomalies in user's transactions"""
     try:
         user_id = get_jwt_identity()
-        limit = request.args.get('limit', 50, type=int)
+        limit = request.args.get('limit', 100, type=int)
         
-        # Detect anomalies
-        anomalies = anomaly_detector.detect_anomalies(user_id, limit)
+        # Get user to determine data type
+        user = users_collection.find_one({'_id': ObjectId(user_id)})
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Determine data type based on user's sample data status
+        data_type = 'sample' if user.get('has_sample_data', False) else 'real'
+        
+        # Detect anomalies with correct data type
+        anomalies = anomaly_detector.detect_anomalies(user_id, limit, data_type)
         
         return jsonify({
             'anomalies': anomalies,
-            'count': len(anomalies)
+            'count': len(anomalies),
+            'data_type': data_type
         }), 200
         
     except Exception as e:
         print(f"Error detecting anomalies: {e}")
         return jsonify({'error': 'Failed to detect anomalies'}), 500
+
+# Removed manual training endpoint - model is now auto-trained
 
 @app.route('/api/anomaly/summary', methods=['GET'])
 @jwt_required()
@@ -2207,7 +2331,46 @@ def get_anomaly_summary():
         data_type = 'sample' if user.get('has_sample_data', False) else 'real'
         
         # Get anomaly summary with correct data type
-        summary = anomaly_detector.get_anomaly_summary(user_id, data_type)
+        raw_summary = anomaly_detector.get_anomaly_summary(user_id, data_type)
+        
+        # Convert to JSON-safe format
+        if raw_summary:
+            summary = {
+                'total_anomalies': raw_summary.get('total_anomalies', 0),
+                'high_severity': raw_summary.get('high_severity', 0),
+                'medium_severity': raw_summary.get('medium_severity', 0),
+                'low_severity': raw_summary.get('low_severity', 0),
+                'risk_level': raw_summary.get('risk_level', 'low'),
+                'recent_anomalies': []
+            }
+            # Convert fraudulent transactions to JSON-safe format
+            if 'fraudulent_transactions' in raw_summary:
+                summary['fraudulent_transactions'] = []
+                for tx in raw_summary['fraudulent_transactions']:
+                    summary['fraudulent_transactions'].append({
+                        'id': str(tx.get('_id', '')),
+                        'amount': tx.get('amount', 0),
+                        'name': tx.get('name', ''),
+                        'date': tx.get('date', ''),
+                        'severity': tx.get('severity', 'medium'),
+                        'reasons': tx.get('reasons', []),
+                        'merchant_name': tx.get('merchant_name', ''),
+                        'category': tx.get('category', ''),
+                        'threat_level': tx.get('threat_level', 'medium'),
+                        'anomaly_reasons': tx.get('reasons', []),
+                        'detected_at': tx.get('detected_at', ''),
+                        'blocked': True
+                    })
+        else:
+            summary = {
+                'total_anomalies': 0,
+                'high_severity': 0,
+                'medium_severity': 0,
+                'low_severity': 0,
+                'risk_level': 'low',
+                'recent_anomalies': [],
+                'fraudulent_transactions': []
+            }
         
         return jsonify(summary), 200
         
@@ -2263,11 +2426,10 @@ def clear_fraudulent_transactions():
         data_type = 'sample' if user.get('has_sample_data', False) else 'real'
         
         # Clear fraudulent transactions
-        deleted_count = anomaly_detector.clear_fraudulent_transactions(user_id, data_type)
+        success = anomaly_detector.clear_fraudulent_transactions(user_id, data_type)
         
         return jsonify({
-            'message': f'Cleared {deleted_count} fraudulent transactions',
-            'deleted_count': deleted_count,
+            'message': 'Cleared fraudulent transaction flags',
             'status': 'success'
         }), 200
         

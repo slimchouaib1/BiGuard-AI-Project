@@ -1,7 +1,42 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import ChatWidget from './ChatWidget';
 
-const Home = ({ user }) => (
+const Home = () => {
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    // Check if user is logged in
+    const token = localStorage.getItem('access_token');
+    const userId = localStorage.getItem('user_id');
+    
+    if (token && userId) {
+      // Try to get user info from the server
+      fetch('/api/auth/me', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+      .then(res => {
+        if (res.ok) {
+          return res.json();
+        }
+        throw new Error('Not authenticated');
+      })
+      .then(data => {
+        setUser(data.user || { id: userId });
+      })
+      .catch(() => {
+        // Clear invalid tokens
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_id');
+        setUser(null);
+      });
+    } else {
+      setUser(null);
+    }
+  }, []);
+
+  return (
   <>
     {/* Header */}
     <header className="sticky top-0 z-50 w-full border-b bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
@@ -23,7 +58,16 @@ const Home = ({ user }) => (
           {user ? (
             <>
               <a href="/dashboard" className="text-[#333333] hover:text-[#FF6A00]">Dashboard</a>
-              <button className="bg-[#FF6A00] hover:bg-[#E55A00] text-white px-4 py-2 rounded-lg">Logout</button>
+              <button 
+                onClick={() => {
+                  localStorage.removeItem('access_token');
+                  localStorage.removeItem('user_id');
+                  window.location.href = '/';
+                }}
+                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white px-4 py-2 rounded-lg"
+              >
+                Logout
+              </button>
             </>
           ) : (
             <>
@@ -186,7 +230,8 @@ const Home = ({ user }) => (
         </div>
       </div>
     </footer>
-  </>
-);
+    </>
+  );
+};
 
 export default Home; 

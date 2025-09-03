@@ -129,6 +129,7 @@ const Dashboard = () => {
   const [error, setError] = useState('');
   const [linkToken, setLinkToken] = useState(null);
   const [linkError, setLinkError] = useState('');
+  const [linkSuccess, setLinkSuccess] = useState('');
   const [accounts, setAccounts] = useState([]);
   const [showAll, setShowAll] = useState(false);
   const [search, setSearch] = useState("");
@@ -284,8 +285,12 @@ const Dashboard = () => {
 
       if (response.ok) {
         setLinkToken(null);
+        setLinkError('');
+        setLinkSuccess('Bank account connected successfully!');
         fetchDashboardData();
         fetchDataStatus();
+        // Clear success message after 5 seconds
+        setTimeout(() => setLinkSuccess(''), 5000);
       } else {
         setLinkError('Failed to connect bank account');
       }
@@ -298,6 +303,7 @@ const Dashboard = () => {
   const handlePlaidExit = () => {
     setLinkToken(null);
     setLinkError('');
+    setLinkSuccess('');
   };
 
   useEffect(() => {
@@ -368,6 +374,8 @@ const Dashboard = () => {
     }
   };
 
+  // Removed manual training - model is now auto-trained
+
   if (!dashboardData) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -420,7 +428,22 @@ const Dashboard = () => {
               >
                 {connectingBank ? 'Connecting...' : 'Switch to Real Bank'}
               </button>
-              <a href="/logout" className="text-gray-500 hover:text-gray-700 text-sm">Logout</a>
+              {linkError && (
+                <div className="text-red-500 text-xs mt-1">{linkError}</div>
+              )}
+              {linkSuccess && (
+                <div className="text-green-500 text-xs mt-1">{linkSuccess}</div>
+              )}
+              <button
+                onClick={() => {
+                  localStorage.removeItem('access_token');
+                  localStorage.removeItem('user_id');
+                  window.location.href = '/';
+                }}
+                className="text-gray-500 hover:text-gray-700 text-sm"
+              >
+                Logout
+              </button>
             </div>
           </div>
         </div>
@@ -559,18 +582,21 @@ const Dashboard = () => {
                     </svg>
                   </div>
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Fraud Detection Status</p>
+                    <p className="text-sm font-medium text-gray-600">Real-Time Fraud Detection</p>
                     <p className={`text-2xl font-bold ${
                       anomalySummary.risk_level === 'high' ? 'text-red-600' :
                       anomalySummary.risk_level === 'medium' ? 'text-yellow-600' :
                       'text-green-600'
                     }`}>
-                      {anomalySummary.risk_level === 'high' ? 'High Risk' :
-                       anomalySummary.risk_level === 'medium' ? 'Medium Risk' :
-                       'Low Risk'}
+                      {anomalySummary.risk_level === 'high' ? '🚨 High Risk' :
+                       anomalySummary.risk_level === 'medium' ? '⚠️ Medium Risk' :
+                       '✅ Low Risk'}
                     </p>
                     <p className="text-sm text-gray-500">
-                      {anomalySummary.total_anomalies} fraudulent transactions blocked
+                      {anomalySummary.total_anomalies} fraudulent transactions detected & blocked
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      AI-powered real-time monitoring active
                     </p>
                   </div>
                 </div>
@@ -582,14 +608,16 @@ const Dashboard = () => {
                       <div>Low: {anomalySummary.low_severity}</div>
                     </div>
                   </div>
-                  {anomalySummary.total_anomalies > 0 && (
-                    <button
-                      onClick={handleClearFraudulentTransactions}
-                      className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors text-sm"
-                    >
-                      Clear All
-                    </button>
-                  )}
+                  <div className="flex items-center space-x-2">
+                    {anomalySummary.total_anomalies > 0 && (
+                      <button
+                        onClick={handleClearFraudulentTransactions}
+                        className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors text-sm"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
               
@@ -621,10 +649,20 @@ const Dashboard = () => {
                                 <span>{new Date(fraudTx.date).toLocaleDateString()}</span>
                               </div>
                               <div className="text-xs text-gray-500 mt-1">
-                                <span className="font-medium">Blocked for:</span> {fraudTx.reasons.join(', ')}
+                                <span className="font-medium">Threat Level:</span> 
+                                <span className={`ml-1 px-2 py-1 rounded text-xs ${
+                                  fraudTx.threat_level === 'high' ? 'bg-red-100 text-red-800' :
+                                  fraudTx.threat_level === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                                  'bg-blue-100 text-blue-800'
+                                }`}>
+                                  {fraudTx.threat_level?.toUpperCase() || 'MEDIUM'}
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                <span className="font-medium">Blocked for:</span> {fraudTx.anomaly_reasons?.join(', ') || fraudTx.reasons?.join(', ') || 'Suspicious activity'}
                               </div>
                               <div className="text-xs text-gray-400 mt-1">
-                                Detected: {new Date(fraudTx.detected_at).toLocaleString()}
+                                Detected: {new Date(fraudTx.detected_at || fraudTx.date).toLocaleString()}
                               </div>
                             </div>
                           </div>
@@ -709,15 +747,38 @@ const Dashboard = () => {
                         return matchesSearch && matchesCategory;
                       })
                       .map((transaction) => (
-                        <tr key={transaction.id}>
+                        <tr key={transaction.id} className={transaction.is_fraudulent ? 'bg-red-50 border-l-4 border-red-500' : ''}>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">{transaction.name}</div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {transaction.name}
+                              {transaction.is_fraudulent && (
+                                <span className="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                  🚨 BLOCKED
+                                </span>
+                              )}
+                            </div>
                             <div className="text-sm text-gray-500">{transaction.merchant_name || ''}</div>
+                            {transaction.is_fraudulent && transaction.anomaly_reasons && (
+                              <div className="text-xs text-red-600 mt-1">
+                                {transaction.anomaly_reasons.join(', ')}
+                              </div>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
                               {transaction.category}
                             </span>
+                            {transaction.is_fraudulent && (
+                              <div className="mt-1">
+                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                  transaction.threat_level === 'high' ? 'bg-red-100 text-red-800' :
+                                  transaction.threat_level === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                                  'bg-blue-100 text-blue-800'
+                                }`}>
+                                  {transaction.threat_level?.toUpperCase() || 'MEDIUM'} THREAT
+                                </span>
+                              </div>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             {new Date(transaction.date).toLocaleDateString()}
@@ -726,8 +787,8 @@ const Dashboard = () => {
                             <span className={transaction.is_expense ? 'text-red-600' : 'text-green-600'}>
                               {transaction.is_expense ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
                             </span>
-                               </td>
-                             </tr>
+                          </td>
+                        </tr>
                       ))}
                     </tbody>
                   </table>
